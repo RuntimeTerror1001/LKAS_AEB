@@ -1,0 +1,6 @@
+float32 center_x
+float32 center_y
+float32 curvature_left
+float32 curvature_right
+float32 lane_width
+bool detected
