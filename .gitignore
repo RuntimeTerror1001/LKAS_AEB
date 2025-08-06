@@ -3,6 +3,7 @@
 build/
 install/
 log/
+docs/
 
 src/carla-ros-bridge/
 src/lkas_aeb/models/
