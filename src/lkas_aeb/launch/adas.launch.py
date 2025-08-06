@@ -53,8 +53,8 @@ def generate_launch_description():
 
     vehicle_control_node = Node(
         package= 'lkas_aeb',
-        executable= 'vehicle_control_node',
-        name= 'vehicle_control_node',
+        executable= 'control_node',
+        name= 'control_node',
         output= 'screen'
     )
 
