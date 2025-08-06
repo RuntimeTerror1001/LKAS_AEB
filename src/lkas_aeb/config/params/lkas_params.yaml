@@ -1,0 +1,21 @@
+lane_detection:
+  hsv_white_lower: [0, 0, 200]  # HSV lower bound for white lanes
+  hsv_white_upper: [180, 25, 255] # HSV upper bound for white lanes
+  hsv_yellow_lower: [20, 100, 100] 
+  hsv_yellow_upper: [30, 255, 255]
+  canny_threshold1: 50
+  canny_threshold2: 100
+  hough_threshold: 50
+  max_line_gap: 100 
+  min_line_length: 50
+
+control:
+  lookahead_distance: 10.0 # Pure Pursuit lookahead (meters)
+  wheelbase: 2.875 # Vehicle wheelbase (meters)
+  max_steering_angle: 0.6 # Radians
+  speed_pid_gains:
+    p: 0.5
+    i: 0.05
+    d: 0.1
+  max_throttle: 1.0
+  max_brake: 1.0

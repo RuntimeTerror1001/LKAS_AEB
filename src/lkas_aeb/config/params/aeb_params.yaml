@@ -1,0 +1,12 @@
+perception:
+  confidence_threshold: 0.5
+  classes_of_interest: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]
+  roi_width: 0.6
+  focal_length: 1100
+  max_tracking_time: 4.0
+  nms_iou_threshold: 0.4
+
+control:
+  critical_ttc: 2.0 # Braking threshold (seconds)
+  max_brake_force: 1.0 # Percentage (0-1)
+  min_obstacle_size: 0.05 # Minimum bounding box area ratio
