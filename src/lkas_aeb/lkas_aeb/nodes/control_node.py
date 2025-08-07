@@ -287,6 +287,99 @@ class ControlNode(Node):
             distances.append(np.hypot(dx, dy))
         
         return np.std(distances) > 2.0 # High variance = intersection
+    
+    def calculate_obstacle_speed_factor(self, obstacles, curr_speed):
+        """
+        Calculate speed reduction factor based on obstacles with progressive reduction.
+        
+        Args:
+            obstacles: List of detected obstacles
+            curr_speed: Current ego vehicle speed
+            
+        Returns:
+            tuple: (speed_factor, closest_distance, emergency_stop_required)
+        """
+        if not obstacles:
+            return 1.0, float('inf'), False
+        
+        # Find closest obstacle with class-specific considerations
+        closest_distance = float('inf')
+        closest_class = None
+        
+        for obstacle in obstacles:
+            if hasattr(obstacle, 'distance'):
+                if obstacle.distance < closest_distance:
+                    closest_distance = obstacle.distance
+                    closest_class = getattr(obstacle, 'class_id', 0)
+        
+        if closest_distance == float('inf'):
+            return 1.0, float('inf'), False
+        
+        # ========================
+        # CLASS-SPECIFIC DISTANCE THRESHOLDS
+        # ========================
+        if closest_class in [2, 5, 7]:  # Cars, buses, trucks
+            critical_distance = 5.0    # Emergency stop
+            brake_distance = 12.0      # Start heavy braking
+            slow_distance = 25.0       # Start speed reduction
+            comfort_distance = 40.0    # Comfortable following
+        elif closest_class in [0]:  # Pedestrians
+            critical_distance = 3.0
+            brake_distance = 8.0
+            slow_distance = 15.0
+            comfort_distance = 25.0
+        else:  # Motorcycles, bikes, unknown
+            critical_distance = 4.0
+            brake_distance = 10.0
+            slow_distance = 20.0
+            comfort_distance = 30.0
+        
+        # ========================
+        # PROGRESSIVE SPEED REDUCTION
+        # ========================
+        emergency_stop = False
+        
+        if closest_distance < critical_distance:
+            # CRITICAL: Emergency stop required
+            speed_factor = 0.0
+            emergency_stop = True
+            self.get_logger().error(f"CRITICAL DISTANCE: {closest_distance:.1f}m - EMERGENCY STOP!")
+            
+        elif closest_distance < brake_distance:
+            # BRAKING ZONE: Rapid speed reduction
+            # Linear reduction from 0.3 to 0.0 as we get closer
+            normalized_distance = (closest_distance - critical_distance) / (brake_distance - critical_distance)
+            speed_factor = 0.3 * normalized_distance  # Max 30% speed in braking zone
+            self.get_logger().warning(f"BRAKING ZONE: {closest_distance:.1f}m - Speed factor: {speed_factor:.2f}")
+            
+        elif closest_distance < slow_distance:
+            # SLOW ZONE: Moderate speed reduction  
+            # Linear reduction from 0.7 to 0.3 as we get closer
+            normalized_distance = (closest_distance - brake_distance) / (slow_distance - brake_distance)
+            speed_factor = 0.3 + 0.4 * normalized_distance  # 30% to 70% speed
+            self.get_logger().info(f"SLOW ZONE: {closest_distance:.1f}m - Speed factor: {speed_factor:.2f}")
+            
+        elif closest_distance < comfort_distance:
+            # CAUTION ZONE: Light speed reduction
+            # Linear reduction from 1.0 to 0.7 as we get closer  
+            normalized_distance = (closest_distance - slow_distance) / (comfort_distance - slow_distance)
+            speed_factor = 0.7 + 0.3 * normalized_distance  # 70% to 100% speed
+            self.get_logger().debug(f"CAUTION ZONE: {closest_distance:.1f}m - Speed factor: {speed_factor:.2f}")
+            
+        else:
+            # SAFE ZONE: Full speed allowed
+            speed_factor = 1.0
+        
+        # ========================
+        # SPEED-DEPENDENT ADJUSTMENTS
+        # ========================
+        # At higher speeds, be more conservative
+        if curr_speed > 10.0:  # Above 36 km/h
+            speed_factor *= 0.9  # 10% more conservative
+        if curr_speed > 15.0:  # Above 54 km/h  
+            speed_factor *= 0.8  # Additional 20% reduction
+        
+        return speed_factor, closest_distance, emergency_stop
 
     def control_loop(self):
         """
@@ -377,6 +470,9 @@ class ControlNode(Node):
         else:
             obstacles = self.obstacles  
 
+        # Calculate progressive speed reduction based on obstacles
+        obstacle_speed_factor, closest_distance, emergency_stop = self.calculate_obstacle_speed_factor(obstacles, self.curr_speed)
+
         # Log obstacle information for debugging
         # if obstacles:
         #     self.get_logger().info(f"Processing {len(obstacles)} obstacles")
@@ -386,47 +482,67 @@ class ControlNode(Node):
         #             f"Class={obs.class_id}, TrackID={getattr(obs, 'track_id', 'None')}"
         #         )
 
-        # Calculate time-to-collision and emergency braking
-        ttc_msg = self.aeb_controller.calculate_ttc(obstacles, self.curr_speed, obs_time)
-        aeb_brake = self.aeb_controller.decide_braking(ttc_msg, self.curr_speed)
-
         # ========================
-        # OBSTACLE-BASED SAFETY OVERRIDE
+        # COMPREHENSIVE SPEED ADAPTATION
         # ========================
-        # Check if any obstacle is too close for safe operation
-        emergency_stop = False
-        min_safe_distance = 15.0  # Minimum safe following distance
-
-        if obstacles:
-            for obstacle in obstacles:
-                if hasattr(obstacle, 'distance') and obstacle.distance < min_safe_distance:
-                    emergency_stop = True
-                    break
-
+        # Start with base target speed
+        adapted_target_speed = self.target_speed
+        
+        # Apply curve speed factor
+        curve_factor = self.calculate_curve_speed_factor()
+        adapted_target_speed *= curve_factor
+        
+        # Apply intersection speed factor
+        if self.is_intersection():
+            adapted_target_speed *= 0.7  # 30% reduction in intersections
+        
+        # Apply obstacle-based speed reduction (most important)
+        adapted_target_speed *= obstacle_speed_factor
+        
         # ========================
-        # FINAL CONTROL CALCULATION
-        # ========================   
+        # EMERGENCY OVERRIDE OR NORMAL CONTROL
+        # ========================
         if emergency_stop:
-            # Complete stop override - no forward motion allowed
+            # EMERGENCY: Complete stop required
             throttle = 0.0
-            brake = max(0.8, aeb_brake)  # Strong braking
-            self.get_logger().warning(f"EMERGENCY STOP: Obstacle too close - Full brake!")
+            brake = 1.0  # Maximum brake
             
+            # Engage handbrake if still moving
+            if self.curr_speed > 0.5:
+                control_msg = CarlaEgoVehicleControl()
+                control_msg.throttle = 0.0
+                control_msg.brake = 1.0
+                control_msg.steer = float(np.nan_to_num(pp_steering, nan=0.0))
+                control_msg.reverse = False
+                control_msg.hand_brake = True
+                self.control_pub.publish(control_msg)
+                
+                self.get_logger().error(f"EMERGENCY HANDBRAKE: Distance={closest_distance:.1f}m, Speed={self.curr_speed:.1f}m/s")
+                return
+                
         else:
-            # Normal operation - calculate target speed with curve compensation
-            effective_target_speed = self.target_speed * curve_factor
-
-            # Calculate throttle & brake from Speed PID
-            throttle, brake = self.speed_pid.update(effective_target_speed, self.curr_speed, curr_time)
-
-            # Apply AEB override if needed
-            if aeb_brake > 0:
-                brake = max(brake, aeb_brake)
-                throttle = 0.0  # Cut throttle during emergency braking
-                self.get_logger().info(f"AEB ACTIVE: Applied brake force {aeb_brake:.2f}")
-
+            # NORMAL OPERATION: Use adapted target speed
+            throttle, brake = self.speed_pid.update(adapted_target_speed, self.curr_speed, curr_time)
+            
+            # Additional AEB check for extra safety
+            ttc_msg = self.aeb_controller.calculate_ttc(obstacles, self.curr_speed, obs_time)
+            aeb_brake = self.aeb_controller.decide_braking(ttc_msg, self.curr_speed)
+            
+            if aeb_brake > brake:
+                brake = aeb_brake
+                throttle = 0.0  # Cut throttle when AEB is active
+        
         # ========================
-        # SAFETY CHECKS AND BOUNDS
+        # STOPPED VEHICLE HOLD
+        # ========================
+        # Prevent creeping when stopped near obstacles
+        if self.curr_speed < 0.8 and closest_distance < 15.0:
+            throttle = 0.0
+            brake = max(brake, 0.4)  # Maintain brake pressure
+            self.get_logger().debug(f"HOLDING BRAKE: Speed={self.curr_speed:.1f}, Distance={closest_distance:.1f}")
+        
+        # ========================
+        # SAFETY BOUNDS AND COMMAND PUBLICATION
         # ========================
         steer = np.nan_to_num(pp_steering, nan=0.0)
         throttle = np.nan_to_num(throttle, nan=0.0)
@@ -437,21 +553,25 @@ class ControlNode(Node):
         throttle = np.clip(throttle, 0.0, 1.0)
         brake = np.clip(brake, 0.0, 1.0)
         
-        # ========================
-        # COMMAND PUBLICATION
-        # ========================
+        # Create and publish control message
         control_msg = CarlaEgoVehicleControl()
         control_msg.steer = float(steer)
         control_msg.throttle = float(throttle)
         control_msg.brake = float(brake)
         control_msg.reverse = False
+        control_msg.hand_brake = False
+        
         self.control_pub.publish(control_msg)
 
-        # Enhanced logging with more detail
-        # if self.get_logger().get_effective_level() <= 20:  # INFO level
-        #     self.get_logger().info(
-        #         f'AEB Brake: {aeb_brake:.2f}, Final Brake: {brake:.2f}'
-        #     )
+        # ========================
+        # ENHANCED LOGGING
+        # ========================
+        if obstacle_speed_factor < 0.9:  # Log when speed is being reduced
+            self.get_logger().info(
+                f'SPEED CONTROL: Target={self.target_speed:.1f} -> Adapted={adapted_target_speed:.1f}m/s, '
+                f'ObsFactor={obstacle_speed_factor:.2f}, Distance={closest_distance:.1f}m, '
+                f'Throttle={throttle:.2f}, Brake={brake:.2f}'
+            )
 
 # ========================
 # MAIN FUNCTION

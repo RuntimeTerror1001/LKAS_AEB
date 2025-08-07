@@ -249,13 +249,13 @@ class AEBController:
             ttc_msg.ttc = min_ttc
             ttc_msg.critical = bool(min_ttc < self.critical_ttc)
             
-            if min_ttc != float('inf'):
-                self.logger.info(
-                    f"Critical obstacle: TTC={min_ttc:.1f}s, "
-                    f"Dist={ttc_msg.distance:.1f}m, "
-                    f"RelSpeed={ttc_msg.relative_speed:.1f}m/s, "
-                    f"EgoSpeed={curr_speed:.1f}m/s"
-                )
+            # if min_ttc != float('inf'):
+            #     self.logger.info(
+            #         f"Critical obstacle: TTC={min_ttc:.1f}s, "
+            #         f"Dist={ttc_msg.distance:.1f}m, "
+            #         f"RelSpeed={ttc_msg.relative_speed:.1f}m/s, "
+            #         f"EgoSpeed={curr_speed:.1f}m/s"
+            #     )
 
         return ttc_msg
     
