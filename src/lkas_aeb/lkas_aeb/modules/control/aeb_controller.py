@@ -272,20 +272,31 @@ class AEBController:
         """
         distance = ttc_msg.distance
         ttc = ttc_msg.ttc
+
+        # ========================
+        # IMMEDIATE SAFETY OVERRIDE
+        # ========================
+        # Very close obstacles - immediate max braking
+        if distance < 5.0:  # Critical distance
+            brake_force = self.max_brake
+            self.logger.warning(f"CRITICAL DISTANCE: {distance:.1f}m - MAXIMUM BRAKE!")
+            return np.clip(brake_force, 0.0, self.max_brake)
         
         # ========================
-        # DISTANCE-BASED EMERGENCY OVERRIDE
+        # DISTANCE-BASED EMERGENCY BRAKING
         # ========================
         if distance < self.emergency_distance:
-            # Very close - maximum braking regardless of TTC
-            brake_force = self.max_brake
-            self.logger.warning(f"DISTANCE EMERGENCY: {distance:.1f}m < {self.emergency_distance}m - Max brake!")
+            # Progressive braking based on distance
+            distance_severity = (self.emergency_distance - distance) / self.emergency_distance
+            brake_force = 0.6 + 0.4 * distance_severity  # 60-100% brake force
+            brake_force *= self.max_brake
+            self.logger.warning(f"DISTANCE EMERGENCY: {distance:.1f}m - Brake: {brake_force:.2f}")
             
         elif distance < self.warning_distance:
-            # Close - progressive braking based on distance
-            distance_factor = 1.0 - (distance - self.emergency_distance) / (self.warning_distance - self.emergency_distance)
-            brake_force = 0.4 * self.max_brake * distance_factor
-            self.logger.info(f"DISTANCE WARNING: {distance:.1f}m - Brake force: {brake_force:.2f}")
+            # Warning zone - moderate braking
+            distance_factor = (self.warning_distance - distance) / (self.warning_distance - self.emergency_distance)
+            brake_force = 0.3 * self.max_brake * distance_factor
+            self.logger.info(f"DISTANCE WARNING: {distance:.1f}m - Brake: {brake_force:.2f}")
 
         # ========================
         # TTC BASED BRAKING STAGES
@@ -308,22 +319,16 @@ class AEBController:
             return 0.0
         
         # ========================
-        # DYNAMIC BRAKING ADJUSTMENTS
+        # SPEED DEPENDENT BRAKING ADJUSTMENTS
         # ========================
+        if brake_force > 0:
+            # Increase braking force at higher speeds
+            speed_factor = min(1.5, 1.0 + curr_speed / 20.0)
+            brake_force *= speed_factor
             
-        # Speed-dependent braking adjustment
-        speed_factor = min(1.5, 1.0 + curr_speed / 30.0)  # Increase up to 50% at 30 m/s
-        brake_force *= speed_factor
-        
-        # Distance dependant braking adjustment
-        if distance < 10.0:  # Less than 10 meters
-            distance_factor = max(1.0, (10.0 - distance) / 10.0 + 1.0)
-            brake_force *= distance_factor
-        
-        # Relative speed consideration
-        if ttc_msg.relative_speed > 10.0:  # High relative speed
-            relative_speed_factor = min(1.3, 1.0 + (ttc_msg.relative_speed - 10.0) / 20.0)
-            brake_force *= relative_speed_factor
+            # Ensure maximum brake force for very close obstacles
+            if distance < 10.0:
+                brake_force = max(brake_force, 0.4 * self.max_brake)
         
         # Final bounds checking
         brake_force = np.clip(brake_force, 0.0, self.max_brake)

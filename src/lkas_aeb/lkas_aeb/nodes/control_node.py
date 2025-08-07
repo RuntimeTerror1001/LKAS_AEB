@@ -18,7 +18,7 @@ from lkas_aeb.modules.control.speed_pid import SpeedPID
 from lkas_aeb.modules.control.aeb_controller import AEBController
 
 """
-Vehicle Control Node
+CONTROL NODE
 """
 
 class ControlNode(Node):
@@ -391,18 +391,39 @@ class ControlNode(Node):
         aeb_brake = self.aeb_controller.decide_braking(ttc_msg, self.curr_speed)
 
         # ========================
+        # OBSTACLE-BASED SAFETY OVERRIDE
+        # ========================
+        # Check if any obstacle is too close for safe operation
+        emergency_stop = False
+        min_safe_distance = 15.0  # Minimum safe following distance
+
+        if obstacles:
+            for obstacle in obstacles:
+                if hasattr(obstacle, 'distance') and obstacle.distance < min_safe_distance:
+                    emergency_stop = True
+                    break
+
+        # ========================
         # FINAL CONTROL CALCULATION
         # ========================   
-        # Calculate target speed with curve compensation
-        effective_target_speed = self.target_speed * curve_factor
+        if emergency_stop:
+            # Complete stop override - no forward motion allowed
+            throttle = 0.0
+            brake = max(0.8, aeb_brake)  # Strong braking
+            self.get_logger().warning(f"EMERGENCY STOP: Obstacle too close - Full brake!")
+            
+        else:
+            # Normal operation - calculate target speed with curve compensation
+            effective_target_speed = self.target_speed * curve_factor
 
-        # Calculate throttle & brake from Speed PID
-        throttle, brake = self.speed_pid.update(effective_target_speed, self.curr_speed, curr_time)
+            # Calculate throttle & brake from Speed PID
+            throttle, brake = self.speed_pid.update(effective_target_speed, self.curr_speed, curr_time)
 
-        # Emergency Override 
-        if aeb_brake > 0:
-            brake = max(brake, aeb_brake)
-            throttle = 0.0  # Cut throttle during emergency braking
+            # Apply AEB override if needed
+            if aeb_brake > 0:
+                brake = max(brake, aeb_brake)
+                throttle = 0.0  # Cut throttle during emergency braking
+                self.get_logger().info(f"AEB ACTIVE: Applied brake force {aeb_brake:.2f}")
 
         # ========================
         # SAFETY CHECKS AND BOUNDS
