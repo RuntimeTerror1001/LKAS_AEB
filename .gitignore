@@ -4,6 +4,8 @@ build/
 install/
 log/
 
+demos/
+
 src/carla-ros-bridge/
 src/lkas_aeb/models/
 src/lkas_aeb/maps/

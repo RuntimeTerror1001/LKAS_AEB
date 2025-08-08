@@ -1,5 +1,10 @@
 # Lane-Keeping & Automatic Emergency Braking (LKAS-AEB) System
 
+<p align="center">
+  <img src="docs/thumbnail.svg" alt="ADAS: Lane Keeping & Emergency Braking (ROS 2 + CARLA)" width="100%">
+</p>
+<!-- <p align="center"><img src="docs/thumbnail.png" alt="ADAS thumbnail (PNG fallback)" width="100%"></p> -->
+
 ## Overview
 This project implements an advanced ADAS (Advanced Driver Assistance System) featuring Lane Keeping Assist (LKAS) and Automatic Emergency Braking (AEB) capabilities. Built on the CARLA simulator with ROS2 integration, the system provides:
 
