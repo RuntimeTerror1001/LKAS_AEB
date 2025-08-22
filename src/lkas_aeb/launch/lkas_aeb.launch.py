@@ -58,6 +58,20 @@ def generate_launch_description():
         output= 'screen'
     )
 
+    new_perception_node = Node(
+        package = 'lkas_aeb',
+        executable = 'new_perception_node',
+        name = 'new_perception_node',
+        output = 'screen' 
+    )
+
+    new_vehicle_control_node = Node(
+        package= 'lkas_aeb',
+        executable= 'new_control_node',
+        name= 'new_control_node',
+        output= 'screen'
+    )
+
     # Visualization Nodes
     map_publisher = Node(
         package= 'lkas_aeb',
@@ -104,8 +118,8 @@ def generate_launch_description():
         carla_bridge,
         ego_vehicle,
         waypoint_launch,
-        perception_node,
-        vehicle_control_node,
+        new_perception_node,
+        new_vehicle_control_node,
         map_publisher,
         vehicle_marker, 
         delayed_spawn_traffic,

@@ -29,6 +29,8 @@ setup(
     entry_points={
         'console_scripts': [
             'perception_node = lkas_aeb.nodes.perception_node:main',
+            'new_perception_node = lkas_aeb.nodes.new_perception_node:main',
+            'new_control_node = lkas_aeb.nodes.new_control_node:main',
             'control_node = lkas_aeb.nodes.control_node:main',
             'map_publisher = lkas_aeb.nodes.map_publisher:main',
             'carla_vehicle_marker = lkas_aeb.nodes.carla_vehicle_marker:main',

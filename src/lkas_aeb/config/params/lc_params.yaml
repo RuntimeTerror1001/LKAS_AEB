@@ -1,0 +1,40 @@
+# Lane Change Parameters Configuration
+# This file contains parameters for lane change safety gating
+
+# Lane geometry parameters
+lane_width: 3.7  # Width of a standard lane in meters
+lc_lookahead_m: 35.0  # Distance ahead to analyze for lane change detection
+
+# Lane Change Assist Hold parameters
+lca_hold:
+  # Minimum safe distances
+  D_front_min: 30.0  # Minimum distance to front vehicle in target lane (meters)
+  D_rear_min: 25.0   # Minimum distance to rear vehicle in target lane (meters)
+  
+  # Time-to-collision threshold
+  TTC_min: 5.0  # Minimum time-to-collision before allowing lane change (seconds)
+  
+  # Near-side detection window
+  near_side_window: 8.0  # Distance threshold for "alongside" detection (meters)
+  
+  # Spatial polygons for left and right lane detection zones
+  # These define the regions where vehicles are considered to be in adjacent lanes
+  # Coordinates are in base_link frame: x-forward, y-left
+  
+  left_poly:
+    x_min: -12.0  # 12m behind ego vehicle
+    x_max: 2.0    # 2m ahead of ego vehicle
+    y_min: 2.2    # Inner boundary of left lane
+    y_max: 3.8    # Outer boundary of left lane
+    
+  right_poly:
+    x_min: -12.0  # 12m behind ego vehicle  
+    x_max: 2.0    # 2m ahead of ego vehicle
+    y_min: -3.8   # Outer boundary of right lane (negative y = right)
+    y_max: -2.2   # Inner boundary of right lane
+
+# Additional safety margins (optional)
+safety_margins:
+  speed_dependent_margin: true  # Increase margins at higher speeds
+  margin_scale_factor: 1.2      # Multiplier for base distances at high speed
+  high_speed_threshold: 15.0    # Speed threshold for increased margins (m/s)

@@ -78,11 +78,6 @@ class ObstacleDetector:
         
         # Get class names for visualization
         self.class_names = self.get_class_names()
-        self.focal_length = self.params['focal_length']
-        self.frame_rate = 30.0
-        self.last_time = None
-        
-        self.class_names = self.get_class_names()
 
     def get_class_names(self):
         """
