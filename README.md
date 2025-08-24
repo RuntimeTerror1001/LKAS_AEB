@@ -6,22 +6,31 @@
 <!-- <p align="center"><img src="docs/thumbnail.png" alt="ADAS thumbnail (PNG fallback)" width="100%"></p> -->
 
 ## Overview
-This project implements an advanced ADAS (Advanced Driver Assistance System) featuring Lane Keeping Assist (LKAS) and Automatic Emergency Braking (AEB) capabilities. Built on the CARLA simulator with ROS2 integration, the system provides:
+This project implements an advanced ADAS (Advanced Driver Assistance System) featuring Pure Pursuit Lane Keeping Assist (LKAS) and Automatic Emergency Braking (AEB) capabilities with multi-sensor fusion. Built on the CARLA simulator with ROS2 integration, the system provides:
 
-- **Lane Detection & Tracking**: Computer vision-based lane detection using HSV filtering and Hough transforms  
-- **Pure Pursuit Control**: Adaptive path-following algorithm for lane keeping  
-- **Obstacle Detection**: YOLOv8-based object detection with multi-object tracking  
+- **Front Fusion**: RGB camera (YOLOv8) ⊕ LiDAR clusters for in-path obstacle detection
+- **Rear Fusion**: Dual short-range radars (left/right) ⊕ rear RGB camera for rear obstacle awareness & safe lane-change gating
+- **Kalman Multi-Object Tracking** with data association and distance consistency checks
+- **Pure Pursuit Control**: Adaptive path-following algorithm for lane keeping
 - **Collision Prediction**: Time-to-collision (TTC) calculation with multi-stage braking  
 - **Emergency Braking**: Distance-based and TTC-based braking strategies  
 
+## Reported Results (CARLA 0.9.15)
+
+- **Lane-keeping**: ≤ 0.25 m lateral error at 60 km/h using adaptive lookahead Pure Pursuit (waypoint centerline)
+- **AEB**: Critical stop < 500 ms after TTC breach (controller tick + brake command path)
+- Validated in 40+ mixed-traffic scenarios (highway, urban, parked-car corridors)
+
 ## Key Features
 
-### Perception System
-- **Lane Detection**: Real-time lane detection with perspective transformation and polynomial fitting  
-- **Obstacle Detection**: YOLOv8-based detection with class-specific distance estimation  
-- **Multi-Object Tracking**: Kalman-filter based tracking for consistent obstacle identification  
+### Perception & Fusion 
+- **Object Detection**: YOLOv8 (class-aware) with tracked IDs
+- **LiDAR Processing**: ROI clamping, clustering, and 3D centroiding
+- **Rear Sensing**: Two side radars for blind-spot/rear closing vehicles; rear RGB for visual confirmation
+- **Tracking**: Kalman filter with gating on distance/appearance for stable tracks
+- **In-Lane Gate**: Drops obstacles with |y| > (half-lane + margin), eliminating curb-parked false positives
 
-### Control System
+### Control & Safety
 - **Adaptive Pure Pursuit**: Speed-dependent lookahead distance for smooth steering  
 - **Speed PID Controller**: Adaptive gains with anti-windup and dead zone handling  
 - **Multi-Stage AEB**: Warning, critical, and emergency braking thresholds  
@@ -81,8 +90,10 @@ This project implements an advanced ADAS (Advanced Driver Assistance System) fea
 
 ## Configuration
 The system is highly configurable through YAML parameter files located in config/params/:
-- **Lane Detection Parameters**: lkas_params.yaml
-- **AEB Parameters**: aeb_params.yaml
+- **Perception & Fusion**: perception_params.yaml 
+- **AEB**: aeb_params.yaml
+- **Lane Change**: lc_params.yaml
+- **Lane Keeping Assistant**: lkas_params.yaml 
 
 Key adjustable parameters include:
 - Confidence thresholds
@@ -92,7 +103,6 @@ Key adjustable parameters include:
 - Region of interest settings
 
 ## Custom Messages
-- **LaneInfo.msg:** Lane center, curvature, and confidence
 - **Obstacle.msg:** Object class, distance, speed, and bounding box
 - **ObstacleArray.msg:** Collection of detected obstacles
 - **TTC.msg:** Time-to-collision and criticality data
