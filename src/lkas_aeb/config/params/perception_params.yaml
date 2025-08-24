@@ -1,0 +1,305 @@
+# ============================================================================
+# PERCEPTION PARAMETERS CONFIGURATION
+# ============================================================================
+# Centralized parameter file for all perception modules
+# Values are organized by module for clarity and maintainability
+
+# Common parameters used across multiple modules
+common:
+  # Coordinate frames
+  base_frame: "base_link"
+  camera_frame: "camera_front"
+  lidar_frame: "lidar_front"
+  
+  # Timing parameters
+  max_processing_time: 0.1  # seconds
+  sensor_timeout: 0.2       # seconds
+  
+  # Confidence thresholds
+  min_confidence: 0.3
+  high_confidence: 0.8
+  
+  # Distance parameters
+  max_detection_range: 120.0  # meters
+  min_detection_range: 0.5    # meters
+
+# ============================================================================
+# FRONT CAMERA PARAMETERS
+# ============================================================================
+front_camera:
+  # Camera intrinsics
+  intrinsics:
+    fx: 1100.0
+    fy: 1100.0
+    cx: 400.0  # width/2
+    cy: 300.0  # height/2
+    width: 800
+    height: 600
+  
+  # Detection parameters
+  detection:
+    min_bbox_area: 6000      # minimum bounding box area in pixels
+    bbox_padding: 6          # padding around bounding box for association
+    min_confidence: 0.5      # minimum detection confidence
+    max_distance: 120.0      # maximum detection distance
+    
+  # Object classification
+  classes:
+    person: 0
+    bicycle: 1
+    car: 2
+    motorcycle: 3
+    bus: 5
+    truck: 7
+
+# ============================================================================
+# FRONT LIDAR PARAMETERS
+# ============================================================================
+front_lidar:
+  # Region of Interest (ROI)
+  roi:
+    x_min: 1.0      # ignore ego vehicle hood
+    x_max: 120.0    # maximum forward range
+    y_max: 8.0      # maximum lateral range (±8m)
+    z_min: -1.5     # minimum height (below ground)
+    z_max: 3.0      # maximum height
+  
+  # Ground removal
+  ground_removal:
+    z_max: 0.20     # points below this height considered ground
+    ransac_distance: 0.08     # RANSAC distance threshold
+    normal_min_z: 0.85        # minimum z-component of ground normal
+  
+  # Voxel downsampling
+  voxel:
+    size: 0.15                # voxel size in meters
+    min_points_per_voxel: 1   # minimum points to keep voxel
+  
+  # Clustering
+  clustering:
+    method: "connected_components"  # or "dbscan"
+    min_voxels: 3                   # minimum voxels per cluster
+    max_voxels: 50000              # maximum voxels per cluster
+    eps: 0.6                       # DBSCAN eps parameter
+    min_samples: 6                 # DBSCAN min_samples parameter
+  
+  # Outlier removal
+  outlier_removal:
+    enabled: false
+    radius: 0.5      # search radius
+    min_neighbors: 16 # minimum neighbors in radius
+
+# ============================================================================
+# FRONT SENSOR FUSION PARAMETERS
+# ============================================================================
+front_fusion:
+  # Extrinsics (base_link to camera transform)
+  extrinsics:
+    T_cam_base: [1.0, 0.0, 0.0, 0.0,   # 4x4 transformation matrix
+                 0.0, 1.0, 0.0, 0.0,   # from base_link to camera
+                 0.0, 0.0, 1.0, 0.0,
+                 0.0, 0.0, 0.0, 1.0]
+  
+  # Association parameters
+  bbox_pad_px: 6              # bounding box padding for containment check
+  dist_consistency_m: 8.0     # maximum distance difference for association
+  max_bearing_diff: 0.3       # maximum bearing difference (radians)
+  min_bbox_area_px: 6000      # minimum bbox area for consideration
+  
+  # LiDAR confirmation
+  lidar_confirm_min_points: 10              # minimum points for LiDAR confirmation
+  confidence_boost: 0.2       # confidence boost when LiDAR confirmed
+  
+  # LiDAR-only detections
+  publish: false              # publish LiDAR-only detections
+  lidar_only_min_points: 30              # minimum points for LiDAR-only detection
+  
+  # Kalman filter tracking
+  tracking:
+    # Process noise
+    q_c: 2.0                    # continuous-time process noise density
+    
+    # Measurement noise (standard deviations)
+    sigma_lidar_x: 0.4          # LiDAR measurement noise in x
+    sigma_lidar_y: 0.2          # LiDAR measurement noise in y
+    sigma_camera_x: 3.0         # Camera measurement noise in x  
+    sigma_camera_y: 1.5         # Camera measurement noise in y
+    
+    # Association gating
+    gate_mahal_thresh: 9.21     # Mahalanobis distance threshold (95% for 2DOF)
+    
+    # Track management
+    min_hits: 2                 # minimum hits for track confirmation
+    max_age: 0.8                # maximum age without update (seconds)
+    max_misses: 5               # maximum consecutive misses
+
+# ============================================================================
+# REAR RADAR PARAMETERS
+# ============================================================================
+rear_radar:
+  # Physical constraints
+  gating:
+    min_range: 1.0      # minimum range (meters)
+    max_range: 100.0    # maximum range (meters)
+    min_elev_deg: -20
+    max_elev_deg: 20
+    min_abs_velocity: 0.5      # minimum velocity for detection (m/s)
+  
+  # Region of Interest for rear sensors
+  roi:
+    x_min: -60.0  # behind vehicle
+    x_max: 10.0   # slightly forward
+    y_min: -8.0   # left side
+    y_max: 8.0    # right side
+  
+  # Clustering
+  clustering:
+    eps: 2.0                # clustering distance threshold
+    min_samples: 2          # minimum points per cluster
+  
+  # Tracking
+  tracking:
+    max_age: 10             # maximum track age (frames)
+    max_association_dist: 5.0  # maximum association distance (meters)
+  
+  # Sensor mounting (approximate transforms to base_link)
+  mounting:
+    rear_left:
+      position: [-2.0, -1.0, 0.0]  # position relative to base_link
+      orientation: 135.0            # degrees (facing rear-left)
+    rear_right:
+      position: [-2.0, 1.0, 0.0]   # position relative to base_link  
+      orientation: -135.0           # degrees (facing rear-right)
+
+# ============================================================================
+# REAR CAMERA PARAMETERS
+# ============================================================================
+rear_camera:
+  # Camera intrinsics
+  intrinsics:
+    fx: 800.0
+    fy: 800.0
+    cx: 400.0    # width/2 (assuming 800px width)
+    cy: 300.0    # height/2 (assuming 600px height)
+    width: 800
+    height: 600
+  
+  # Image processing
+  preprocessing:
+    flip_horizontal: true     # mirror image for rear camera
+  
+  # Detection parameters
+  detection:
+    min_bbox_area: 500       # minimum bounding box area
+    min_confidence: 0.5      # minimum detection confidence
+  
+  # 3D position estimation
+  position_estimation:
+    camera_height: 1.5       # camera height above ground (meters)
+    focal_length: 800.0      # focal length for distance estimation
+  
+  # Region of Interest
+  roi:
+    x_min: -50.0    # behind vehicle
+    x_max: 5.0      # slightly forward  
+    y_min: -6.0     # left side
+    y_max: 6.0      # right side
+
+# ============================================================================
+# REAR SENSOR FUSION PARAMETERS
+# ============================================================================
+rear_fusion:
+  # Association parameters
+  max_position_distance: 3.0    # maximum position difference (meters)
+  max_bearing_diff: 0.3         # maximum bearing difference (radians)
+  min_bbox_overlap: 0.1         # minimum bbox overlap ratio
+  
+  # Fusion weights (for combining sensor measurements)
+  fusion_weights:
+    camera: 0.7     # camera weight for visual properties
+    radar: 0.3      # radar weight for ranging/velocity
+  
+  # Validation thresholds
+  validation:
+    min_confidence: 0.2           # minimum confidence for output
+    max_distance: 100.0           # maximum valid distance
+    max_distance_error: 0.5       # maximum position/distance inconsistency
+
+# ============================================================================
+# LANE DETECTION PARAMETERS
+# ============================================================================
+lane_detection:
+  # Image preprocessing
+  preprocessing:
+    gaussian_blur_kernel: 5
+    roi_vertices: [[0, 720], [350, 400], [930, 400], [1280, 720]]
+  
+  # Edge detection
+  edge_detection:
+    low_threshold: 50
+    high_threshold: 150
+  
+  # Hough transform
+  hough:
+    rho: 1                    # distance resolution
+    theta: 0.017453292        # angular resolution (1 degree)
+    threshold: 30             # minimum votes
+    min_line_length: 40       # minimum line length
+    max_line_gap: 100         # maximum gap between line segments
+  
+  # Lane fitting
+  fitting:
+    polynomial_degree: 2       # degree of polynomial fit
+    fit_margin: 100           # margin around previous fit
+    min_pixels: 50            # minimum pixels to recenter window
+  
+  # Validation
+  validation:
+    min_lane_width: 2.5       # minimum lane width (meters)
+    max_lane_width: 4.5       # maximum lane width (meters)
+    max_curvature: 0.01       # maximum curvature (1/meters)
+
+# ============================================================================
+# PERFORMANCE AND DEBUGGING
+# ============================================================================
+performance:
+  # Processing time limits
+  max_processing_time:
+    front_camera: 0.05        # 50ms
+    front_lidar: 0.03         # 30ms
+    front_fusion: 0.02        # 20ms
+    rear_radar: 0.01          # 10ms
+    rear_camera: 0.05         # 50ms
+    rear_fusion: 0.01         # 10ms
+  
+  # Memory limits
+  max_tracks: 100             # maximum number of tracks
+  max_detections: 50          # maximum detections per frame
+  
+  # Statistics collection
+  collect_stats: true         # enable statistics collection
+  stats_window: 100           # number of frames for statistics
+
+# ============================================================================
+# DEBUGGING AND VISUALIZATION
+# ============================================================================
+debug:
+  # Enable debug outputs
+  enable_debug: false
+  
+  # Visualization
+  visualization:
+    draw_bboxes: true
+    draw_tracks: true
+    draw_associations: false
+    draw_covariance: false
+  
+  # Logging levels
+  log_level: "INFO"           # DEBUG, INFO, WARN, ERROR
+  log_timing: false           # log processing times
+  log_associations: false     # log association results
+  log_fusion: false           # log fusion details
+  
+  # File outputs
+  save_debug_images: false    # save debug images to disk
+  debug_image_path: "/tmp/perception_debug/"

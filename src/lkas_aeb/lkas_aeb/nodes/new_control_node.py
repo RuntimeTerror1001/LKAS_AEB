@@ -155,7 +155,7 @@ class NewControlNode(Node):
             LaneInfo, '/perception/lane_info', self.lane_info_cb, 10
         )
         self.front_obstacles_sub = self.create_subscription(
-            ObstacleArray, '/perception/obstacles_info', self.front_obstacles_cb, 10
+            ObstacleArray, '/perception/obstacles_front_fused', self.front_obstacles_cb, 10
         )
         # NEW: Rear sensor fusion subscriber
         self.rear_obstacles_sub = self.create_subscription(
