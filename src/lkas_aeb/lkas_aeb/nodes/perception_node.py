@@ -208,10 +208,10 @@ class PerceptionNode(Node):
             # ========================
             # PERFORMANCE MONITORING
             # ========================
-            if self.last_image_time is not None:
-                processing_time = curr_time - self.last_image_time
-                if processing_time > 0.1:  # Log if processing takes more than 100ms
-                    self.get_logger().warn(f'Slow processing: {processing_time:.3f}s')
+            # if self.last_image_time is not None:
+            #     processing_time = curr_time - self.last_image_time
+            #     if processing_time > 0.1:  # Log if processing takes more than 100ms
+            #        self.get_logger().warn(f'Slow processing: {processing_time:.3f}s')
             
             self.last_image_time = curr_time
 

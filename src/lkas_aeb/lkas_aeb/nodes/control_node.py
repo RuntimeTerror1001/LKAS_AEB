@@ -110,7 +110,7 @@ class ControlNode(Node):
             LaneInfo, '/perception/lane_info', self.lane_info_cb, 10
         )
         self.obstacles_sub = self.create_subscription(
-            ObstacleArray, '/perception/obstacles_info', self.obstacles_cb, 10
+            ObstacleArray, '/perception/fused_obstacles_front', self.obstacles_cb, 10
         )
         self.speed_sub = self.create_subscription(
             CarlaEgoVehicleStatus, '/carla/hero/vehicle_status', self.vehicle_status_cb, 10
