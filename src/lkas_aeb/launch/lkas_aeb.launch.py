@@ -124,7 +124,8 @@ def generate_launch_description():
                 parameters=[{
                     'iou_thresh': 0.3,
                     'base_link_frame': 'hero',
-                    'camera_optical_frame': 'hero/rgb_front'
+                    'camera_optical_frame': 'hero/rgb_front',
+                    'max_lateral_offset': 3.6,
                 }],
             ),
         ],

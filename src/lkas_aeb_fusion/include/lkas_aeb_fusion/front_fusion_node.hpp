@@ -72,6 +72,10 @@ namespace lkas_aeb_fusion {
             double iou_thresh_;
             std::string base_link_frame_;
             std::string camera_optical_frame_;
+            double max_lateral_offset_;
+            double min_forward_distance_; // Objects behind vehicle
+            double max_unmatched_distance_; // Distant unknown objects
+            double min_object_volume_; // Noise Filtering
     };
 
 } //namespace lkas_aeb_fusion

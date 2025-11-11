@@ -55,7 +55,15 @@ class AEBController:
             bool: True if obstacle data is valid, False otherwise
         """
         # Check distance bounds
-        if not (self.min_reasonable_distance <= obstacle.distance <= self.max_reasonable_distance):
+        base_link_position = getattr(obstacle, 'position', None)
+        if base_link_position is None:
+            return False
+        
+        distance = getattr(base_link_position, 'x', None)
+        if distance is None:
+            return False
+        
+        if not (self.min_reasonable_distance <= distance <= self.max_reasonable_distance):
             return False
             
         # Check bbox size
@@ -85,10 +93,14 @@ class AEBController:
         """
         track_id = int(track_id)
 
+        distance = getattr(getattr(obstacle, 'position', None), 'x', None)
+        if distance is None:
+            return ego_speed
+
         # Initialize new obstacle track        
         if track_id not in self.obstacle_history:
             self.obstacle_history[track_id] = {
-                'distance': obstacle.distance,
+                'distance': distance,
                 'timestamp': timestamp,
                 'speed': 0.0,  # Start with 0 relative speed
                 'confidence': 1.0
@@ -102,7 +114,7 @@ class AEBController:
         prev_confidence = prev_data['confidence']
         
         # Calculate distance change (negative = approaching)
-        distance_change = obstacle.distance - prev_dist
+        distance_change = distance - prev_dist
         
         # Validate distance change
         if abs(distance_change) > 20 * dt:  # Sanity check: max 20 m/s relative speed change
@@ -131,7 +143,7 @@ class AEBController:
         
         # Update history with dictionary
         self.obstacle_history[track_id] = {
-            'distance': obstacle.distance,
+            'distance': distance,
             'timestamp': timestamp,
             'speed': filtered_speed,
             'confidence': new_confidence
@@ -193,13 +205,16 @@ class AEBController:
             relative_speed = self.calculate_relative_speed(obstacle, track_id, timestamp, dt, curr_speed)
             
             # Track closest obstacle for distance-based braking
-            if obstacle.distance < closest_distance:
-                closest_distance = obstacle.distance
+            distance = getattr(getattr(obstacle, 'position', None), 'x', None)
+            if distance is None:
+                continue
+            if distance < closest_distance:
+                closest_distance = distance
             
             # Calculate TTC if there's significant relative speed
             ttc = float('inf')
             if relative_speed > 0.5:  # Reduced threshold for better detection
-                ttc = obstacle.distance / relative_speed
+                ttc = distance / relative_speed
                 
                 # Apply safety margins based on object class
                 safety_factor = 1.0
@@ -215,7 +230,7 @@ class AEBController:
                 if confidence > 0.5 and adjusted_ttc < min_ttc:  # Reduced confidence threshold
                     min_ttc = adjusted_ttc
                     critical_obstacle = obstacle
-                    ttc_msg.distance = obstacle.distance
+                    ttc_msg.distance = distance
                     ttc_msg.relative_speed = relative_speed
                     ttc_msg.obstacle_id = min(obstacle.class_id, 65535)
 

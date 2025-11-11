@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import numpy as np
 import os
+import math
 from ament_index_python.packages import get_package_share_directory
 
 import rclpy
@@ -76,6 +77,11 @@ class ControlNode(Node):
         self.pure_pursuit = PurePursuit(control_params)
         self.speed_pid = SpeedPID(control_params)
         self.aeb_controller = AEBController(control_params, self.get_logger())
+
+        control_defaults = control_params['control']
+        self.default_lane_width = control_defaults.get('default_lane_width', 3.5)
+        self.obstacle_path_lateral_margin = control_defaults.get('obstacle_path_lateral_margin', 0.5)
+        self.obstacle_projection_window = int(control_defaults.get('obstacle_projection_window', 75))
 
         # ========================
         # STATE VARIABLES
@@ -288,6 +294,92 @@ class ControlNode(Node):
         
         return np.std(distances) > 2.0 # High variance = intersection
     
+    @staticmethod
+    def _point_to_segment_distance(px, py, x1, y1, x2, y2):
+        seg_dx = x2 - x1
+        seg_dy = y2 - y1
+        seg_len_sq = seg_dx**2 + seg_dy**2
+
+        if seg_len_sq == 0.0:
+            return math.hypot(px - x1, py - y1)
+        
+        t = ((px - x1) * seg_dx + (py - y1) * seg_dy) / seg_len_sq
+        t = max(0.0, min(1.0, t))
+
+        closest_x = x1 + t * seg_dx
+        closest_y = y1 + t * seg_dy
+
+        return math.hypot(px - closest_x, py - closest_y)
+    
+    def filter_obstacles_on_path(self, obstacles):
+        """
+        Filter obstacles to those that lie within a lateral corridor around a planned path
+
+        Args:
+            obstacles (Sequence[Obstacle]) : Obstacles expressed in the base_link frame.
+
+        Returns:
+            list: Obstacles whose projected position falls within the allowable lateral envelope.
+        """
+        if not obstacles:
+            return []
+        
+        if self.curr_pose is None or not self.waypoints:
+            return list(obstacles)
+        
+        if len(self.pure_pursuit.waypoints) < 2:
+            return list(obstacles)
+        
+        lane_width = self.default_lane_width
+        if self.lane_info and self.lane_info.lane_width > 0.0:
+            lane_width = self.lane_info.lane_width
+        
+        lateral_limit = (lane_width / 2.0) + self.obstacle_path_lateral_margin
+
+        vehicle_loc = self.curr_pose.location
+        yaw_rad = math.radians(self.curr_pose.rotation.yaw)
+        cos_yaw = math.cos(yaw_rad)
+        sin_yaw = math.sin(yaw_rad)
+
+        max_index = min(len(self.pure_pursuit.waypoints) - 1, max(1, self.obstacle_projection_window))
+
+        filtered = []
+        for obstacle in obstacles:
+            base_link_position = getattr(obstacle, 'position', None)
+            if base_link_position is None:
+                continue
+
+            distance = getattr(base_link_position, 'x', None)
+            lateral = getattr(base_link_position, 'y', None)
+            if distance is None or lateral is None:
+                continue
+
+            if distance < 0.0:
+                continue # Behind the ego vehicle
+
+            # Transform obstacles into world frame to compare with waypoints
+            world_x = vehicle_loc.x + distance * cos_yaw - lateral * sin_yaw
+            world_y = vehicle_loc.y + distance * sin_yaw + lateral * cos_yaw
+
+            min_lateral_offset = float('inf')
+
+            for idx in range(max_index):
+                x1, y1 = self.pure_pursuit.waypoints[idx]
+                x2, y2 = self.pure_pursuit.waypoints[idx+1]
+
+                lateral_offset = self._point_to_segment_distance(world_x, world_y, x1, y1, x2, y2)
+                if lateral_offset < min_lateral_offset:
+                    min_lateral_offset = lateral_offset
+
+                if min_lateral_offset <= lateral_limit:
+                    break
+
+            if min_lateral_offset <= lateral_limit:
+                filtered.append(obstacle)
+        
+        return filtered
+
+    
     def calculate_obstacle_speed_factor(self, obstacles, curr_speed):
         """
         Calculate speed reduction factor based on obstacles with progressive reduction.
@@ -307,10 +399,17 @@ class ControlNode(Node):
         closest_class = None
         
         for obstacle in obstacles:
-            if hasattr(obstacle, 'distance'):
-                if obstacle.distance < closest_distance:
-                    closest_distance = obstacle.distance
-                    closest_class = getattr(obstacle, 'class_id', 0)
+            base_link_position = getattr(obstacle, 'position', None)
+            if base_link_position is None:
+                continue
+            
+            distance = getattr(base_link_position, 'x', None)
+            if distance is None:
+                continue
+
+            if distance < closest_distance:
+                closest_distance = distance
+                closest_class = getattr(obstacle, 'class_id', 0)
         
         if closest_distance == float('inf'):
             return 1.0, float('inf'), False
@@ -468,7 +567,9 @@ class ControlNode(Node):
         if curr_time - obs_time > 0.5:  # 500ms staleness threshold
             obstacles = []
         else:
-            obstacles = self.obstacles  
+            obstacles = list(self.obstacles)
+
+        obstacles = self.filter_obstacles_on_path(obstacles)  
 
         # Calculate progressive speed reduction based on obstacles
         obstacle_speed_factor, closest_distance, emergency_stop = self.calculate_obstacle_speed_factor(obstacles, self.curr_speed)
@@ -478,7 +579,7 @@ class ControlNode(Node):
         #     self.get_logger().info(f"Processing {len(obstacles)} obstacles")
         #     for i, obs in enumerate(obstacles[:3]):  # Log first 3 obstacles
         #         self.get_logger().info(
-        #             f"Obstacle {i}: Dist={obs.distance:.1f}m, "
+        #             f"Obstacle {i}: Dist={obs.position.x:.1f}m, "
         #             f"Class={obs.class_id}, TrackID={getattr(obs, 'track_id', 'None')}"
         #         )
 

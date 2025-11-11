@@ -17,6 +17,10 @@ namespace lkas_aeb_fusion{
         this->declare_parameter<double>("iou_threshold", 0.3);
         this->declare_parameter<std::string>("base_link_frame", "hero");
         this->declare_parameter<std::string>("camera_optical_frame", "hero/rgb_front");
+        this->declare_parameter<double>("max_lateral_offset", 3.5);
+        this->declare_parameter<double>("min_forward_distance", 1.0);
+        this->declare_parameter<double>("max_unmatched_distance", 15.0);
+        this->declare_parameter<double>("min_object_volume", 0.1);
 
         // ========================
         // RETRIEVE PARAMS
@@ -24,6 +28,10 @@ namespace lkas_aeb_fusion{
         iou_thresh_ = this->get_parameter("iou_threshold").as_double();
         base_link_frame_ = this->get_parameter("base_link_frame").as_string();
         camera_optical_frame_ = this->get_parameter("camera_optical_frame").as_string();
+        max_lateral_offset_ = this->get_parameter("max_lateral_offset").as_double();
+        min_forward_distance_ = this->get_parameter("min_forward_distance").as_double();
+        max_unmatched_distance_ = this->get_parameter("max_unmatched_distance").as_double();
+        min_object_volume_ = this->get_parameter("min_object_volume").as_double();
 
         // ========================
         // TF2 SETUP
@@ -221,6 +229,10 @@ namespace lkas_aeb_fusion{
                 base_link_bbox.size.y = max_pt.y - min_pt.y;
                 base_link_bbox.size.z = max_pt.z - min_pt.z;
 
+                // Basic Filtering - keep all objects ahead of the vehicle
+                if(base_link_bbox.center.position.x < min_forward_distance_)
+                    continue; // Behind or too close to side
+
                 // ====================
                 // PROJECTION TRANSFORM
                 // ====================
@@ -257,6 +269,22 @@ namespace lkas_aeb_fusion{
                         best_match_idx = i;
                     }
                 }
+                
+                // Smart filtering for unmatched LiDAR detections
+                if(best_iou <= iou_thresh_ || best_match_idx < 0){
+                    // No camera match - LiDAR Only Detection
+                    double lateral_distance = std::abs(base_link_bbox.center.position.y);
+                    double forward_distance = base_link_bbox.center.position.x;
+                    double object_volume = base_link_bbox.size.x * base_link_bbox.size.y * base_link_bbox.size.z;
+
+                    // Filter out roadside clutter
+                    // Only skip if object is both far laterally AND far forward
+                    if(lateral_distance > max_lateral_offset_ && forward_distance > max_unmatched_distance_)
+                        continue; 
+                    
+                    if(object_volume < min_object_volume_)
+                        continue;
+                }
 
                 // ====================
                 // FUSION
@@ -276,7 +304,6 @@ namespace lkas_aeb_fusion{
                     fused_obstacle.track_id = cam_msg->obstacles[best_match_idx].track_id;
                     fused_obstacle.speed = cam_msg->obstacles[best_match_idx].speed;
                     fused_obstacle.relative_speed = cam_msg->obstacles[best_match_idx].relative_speed;
-                    fused_obstacle.distance = cam_msg->obstacles[best_match_idx].distance;
                     
                     // Use camera's bbox
                     fused_obstacle.bbox = cam_msg->obstacles[best_match_idx].bbox;
@@ -290,7 +317,6 @@ namespace lkas_aeb_fusion{
                     fused_obstacle.track_id = 0;  // No tracking
                     fused_obstacle.speed = 0.0;
                     fused_obstacle.relative_speed = 0.0;
-                    fused_obstacle.distance = base_link_bbox.center.position.x;
                     
                     // Use projected bbox
                     fused_obstacle.bbox[0] = projected_bbox.x;
@@ -301,6 +327,7 @@ namespace lkas_aeb_fusion{
                     hypothesis.hypothesis.class_id = "unknown";
                     hypothesis.hypothesis.score = 0.5;
                 }
+                fused_obstacle.position = base_link_bbox.center.position;
 
                 fused_obstacles.obstacles.push_back(fused_obstacle);
                 
