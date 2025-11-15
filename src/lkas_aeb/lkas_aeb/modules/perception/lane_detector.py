@@ -1,5 +1,6 @@
 import cv2 
 import numpy as np
+import warnings
 
 # ========================
 # LANE DETECTOR
@@ -205,13 +206,17 @@ class LaneDetector:
         # ========================
         
         # Hough transform to detect line segments
+        hough_threshold = self.params.get('hough_threshold', 30)
+        min_line_length = self.params.get('min_line_length', 30)
+        max_line_gap = self.params.get('max_line_gap', 150)
+
         lines = cv2.HoughLinesP(
             edges,
             rho=2,                    # Distance resolution
             theta=np.pi/180,          # Angular resolution
-            threshold=30,             # Minimum vote threshold
-            minLineLength=30,         # Minimum line length
-            maxLineGap=150           # Maximum gap between line segments
+            threshold=hough_threshold,             # Minimum vote threshold
+            minLineLength=min_line_length,         # Minimum line length
+            maxLineGap=max_line_gap           # Maximum gap between line segments
         )
 
         # ========================
@@ -221,7 +226,7 @@ class LaneDetector:
         lane_center = None
         left_curverad = None
         right_curverad = None
-        lane_width = 3.7  # Default lane width in meters
+        lane_width = None
         viz = warped.copy()
         left_lines, right_lines = [], []
         left_fit, right_fit = None, None
@@ -260,19 +265,23 @@ class LaneDetector:
             if len(left_pts) > 10:
                 left_pts = np.array(left_pts)
                 try:
-                    left_fit = np.polyfit(left_pts[:,1], left_pts[:,0], 2)
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('error', np.RankWarning)
+                        left_fit = np.polyfit(left_pts[:,1], left_pts[:,0], 2)
                     # Constrain curvature to reasonable values
                     left_fit[0] = np.clip(left_fit[0], -0.01, 0.01)
-                except np.RankWarning:
+                except (np.RankWarning, np.linalg.LinAlgError):
                     left_fit = None
                     
             if len(right_pts) > 10:
                 right_pts = np.array(right_pts)
                 try:
-                    right_fit = np.polyfit(right_pts[:,1], right_pts[:,0], 2)
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('error', np.RankWarning)
+                        right_fit = np.polyfit(right_pts[:,1], right_pts[:,0], 2)
                     # Constrain curvature to reasonable values
                     right_fit[0] = np.clip(right_fit[0], -0.01, 0.01)
-                except np.RankWarning:
+                except (np.RankWarning, np.linalg.LinAlgError):
                     right_fit = None
 
             # Apply temporal smoothing to polynomial fits

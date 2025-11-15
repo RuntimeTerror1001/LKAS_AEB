@@ -5,6 +5,7 @@ from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
 from carla_msgs.msg import CarlaEgoVehicleStatus
 from lkas_aeb_msgs.msg import Obstacle, ObstacleArray, LaneInfo
+from geometry_msgs.msg import Point
 
 from lkas_aeb.modules.perception.lane_detector import LaneDetector
 from lkas_aeb.modules.perception.obstacle_detector import ObstacleDetector
@@ -165,7 +166,7 @@ class PerceptionNode(Node):
                 image_center = cv_image.shape[1] / 2
                 lateral_offset = abs(lane_info.center_x - image_center)
                 # Convert pixel offset to meters (rough estimate)
-                if lane_width > 0:
+                if lane_width is not None and lane_width> 0:
                     lateral_offset_meters = (lateral_offset / cv_image.shape[1]) * lane_width
                     lane_info.lateral_offset = float(lateral_offset_meters)
                 else:
@@ -179,7 +180,7 @@ class PerceptionNode(Node):
             # OBSTACLE DETECTION PROCESSING
             # ========================
             stamp = msg.header.stamp
-            obstacle_img, obstacles = self.obstacle_detector.detect(cv_image, stamp)
+            obstacle_img, detected_obstacles = self.obstacle_detector.detect(cv_image, stamp)
             
             # Publish annotated obstacle image
             self.obstacle_img_pub.publish(self.bridge.cv2_to_imgmsg(obstacle_img, 'bgr8'))
@@ -192,26 +193,20 @@ class PerceptionNode(Node):
             obstacle_array.header.frame_id = 'camera'
 
             # Process each detected obstacle
-            for obs in obstacles:
+            for obs in detected_obstacles:
                 # Obstacle : [x1, y1, x2, y2, dist, speed, cls_id, track_id]
-                obstacle = Obstacle()
-                obstacle.class_id = int(obs[6])
-                obstacle.distance = float(obs[4])
-                obstacle.speed = float(obs[5]) if obs[5] is not None else 0.0
-                obstacle.bbox = [int(obs[0]), int(obs[1]), int(obs[2]), int(obs[3])]
-                obstacle.relative_speed = obstacle.speed - self.curr_vehicle_speed
-                obstacle.track_id = int(obs[7])
-                obstacle_array.obstacles.append(obstacle)
+                obs.relative_speed = float(obs.speed - self.curr_vehicle_speed)
+                obstacle_array.obstacles.append(obs)
             
             self.obstacles_pub.publish(obstacle_array)
 
             # ========================
             # PERFORMANCE MONITORING
             # ========================
-            if self.last_image_time is not None:
-                processing_time = curr_time - self.last_image_time
-                if processing_time > 0.1:  # Log if processing takes more than 100ms
-                    self.get_logger().warn(f'Slow processing: {processing_time:.3f}s')
+            # if self.last_image_time is not None:
+            #     processing_time = curr_time - self.last_image_time
+            #     if processing_time > 0.1:  # Log if processing takes more than 100ms
+            #        self.get_logger().warn(f'Slow processing: {processing_time:.3f}s')
             
             self.last_image_time = curr_time
 

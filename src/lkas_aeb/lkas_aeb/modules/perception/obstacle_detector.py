@@ -2,6 +2,8 @@ import cv2
 import os
 import numpy as np
 from ultralytics import YOLO
+from lkas_aeb_msgs.msg import Obstacle
+from geometry_msgs.msg import Point
 
 """
 OBSTACLE DETECTOR CLASS
@@ -421,6 +423,12 @@ class ObstacleDetector:
                 # Calculate distance using pinhole camera model
                 distance = self.estimate_distance(box, cls_id)
 
+                #Estimate lateral offset in base_link (Assuming camera is aligned with vehicle frame)
+                image_width = image.shape[1]
+                center_x = (x1 + x2) / 2.0
+                pixel_offset = center_x - (image_width / 2.0)
+                lateral = - (pixel_offset / max(self.focal_length, 1e-5)) * distance
+
                 # Calculate velocity and convert to real-world speed
                 velocity_pixels = self.calculate_velocity(box, track_id, dt)
                 speed_mps = self.calculate_speed_mps(velocity_pixels, box, cls_id)
@@ -437,7 +445,15 @@ class ObstacleDetector:
                 }
 
                 # Store obstacle (format compatible with AEB Controller)
-                obstacles.append((x1, y1, x2, y2, distance, speed_mps, cls_id, track_id))
+                obstacle_msg = Obstacle()
+                obstacle_msg.class_id = int(cls_id)
+                obstacle_msg.speed = float(speed_mps)
+                obstacle_msg.relative_speed = 0.0
+                obstacle_msg.track_id = int(track_id)
+                obstacle_msg.bbox = [int(x1), int(y1), int(x2), int(y2)]
+                obstacle_msg.position = Point(x=float(distance), y=float(lateral), z=0.0)
+
+                obstacles.append(obstacle_msg)
 
                 # ========================
                 # VISUALIZATION

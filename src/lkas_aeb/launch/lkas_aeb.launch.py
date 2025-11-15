@@ -3,7 +3,8 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.actions import ExecuteProcess, IncludeLaunchDescription, TimerAction
-from launch_ros.actions import Node
+from launch_ros.actions import Node, ComposableNodeContainer, SetParameter
+from launch_ros.descriptions import ComposableNode
 
 def generate_launch_description():
     # Paths to package resources
@@ -11,6 +12,7 @@ def generate_launch_description():
     carla_ros_bridge_path = get_package_share_directory('carla_ros_bridge')
     carla_spawn_objects_path = get_package_share_directory('carla_spawn_objects')
     waypoint_publisher_path = get_package_share_directory('carla_waypoint_publisher')
+    lidar_params_path = os.path.join(package_path, 'config', 'params', 'lidar_front.yaml')
     rviz_config = os.path.join(package_path, 'config', 'rviz', 'lkas_aeb.rviz')
 
     # Launch CARLA ROS bridge
@@ -23,7 +25,7 @@ def generate_launch_description():
             'autopilot': 'False',
             'passive': 'False',
             'synchronous_mode': 'True',  
-            'fixed_delta_seconds': '0.05',
+            'fixed_delta_seconds': '0.1',
         }.items()
     )
 
@@ -100,7 +102,38 @@ def generate_launch_description():
         arguments = ['-d', rviz_config] 
     )
 
+    # Composable Node Container (Perception)
+    perception_container = ComposableNodeContainer(
+        name='perception_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container_mt',
+        emulate_tty=True,
+        arguments=['--ros_args', '--log-level', 'info', 'enable-intra-process-comms'],
+        composable_node_descriptions=[
+            ComposableNode(
+                package='lkas_aeb_perception',
+                plugin='lkas_aeb_perception::LidarPreprocNode',
+                name='lidar_preproc',
+                parameters=[lidar_params_path]
+            ),
+            ComposableNode(
+                package='lkas_aeb_fusion',
+                plugin='lkas_aeb_fusion::FrontFusionNode',
+                name='front_fusion_node',
+                parameters=[{
+                    'iou_thresh': 0.3,
+                    'base_link_frame': 'hero',
+                    'camera_optical_frame': 'hero/rgb_front',
+                    'max_lateral_offset': 3.6,
+                }],
+            ),
+        ],
+        output='screen'
+    )
+
     return LaunchDescription([
+        SetParameter(name='use_sim_time', value=True),
         carla_bridge,
         ego_vehicle,
         waypoint_launch,
@@ -110,5 +143,6 @@ def generate_launch_description():
         vehicle_marker, 
         delayed_spawn_traffic,
         viewer,
-        rviz_node
+        rviz_node,
+        perception_container,
     ])

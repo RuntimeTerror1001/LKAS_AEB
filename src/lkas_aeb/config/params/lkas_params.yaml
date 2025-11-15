@@ -19,3 +19,6 @@ control:
     d: 0.1
   max_throttle: 1.0
   max_brake: 1.0
+  default_lane_width: 2.6 # meters
+  obstacle_path_lateral_margin: 0.4 # meters beyond lane edges
+  obstacle_projection_window: 75 # waypoints for path proximity

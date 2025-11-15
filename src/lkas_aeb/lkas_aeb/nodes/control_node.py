@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import numpy as np
 import os
+import math
 from ament_index_python.packages import get_package_share_directory
 
 import rclpy
@@ -16,6 +17,8 @@ from lkas_aeb.util.helpers import load_params
 from lkas_aeb.modules.control.pure_pursuit import PurePursuit
 from lkas_aeb.modules.control.speed_pid import SpeedPID
 from lkas_aeb.modules.control.aeb_controller import AEBController
+
+UNKNOWN_CLASS_ID = 65535
 
 """
 CONTROL NODE
@@ -77,6 +80,11 @@ class ControlNode(Node):
         self.speed_pid = SpeedPID(control_params)
         self.aeb_controller = AEBController(control_params, self.get_logger())
 
+        control_defaults = control_params['control']
+        self.default_lane_width = control_defaults.get('default_lane_width', 3.5)
+        self.obstacle_path_lateral_margin = control_defaults.get('obstacle_path_lateral_margin', 0.5)
+        self.obstacle_projection_window = int(control_defaults.get('obstacle_projection_window', 75))
+
         # ========================
         # STATE VARIABLES
         # ========================
@@ -110,7 +118,7 @@ class ControlNode(Node):
             LaneInfo, '/perception/lane_info', self.lane_info_cb, 10
         )
         self.obstacles_sub = self.create_subscription(
-            ObstacleArray, '/perception/obstacles_info', self.obstacles_cb, 10
+            ObstacleArray, '/perception/fused_obstacles_front', self.obstacles_cb, 10
         )
         self.speed_sub = self.create_subscription(
             CarlaEgoVehicleStatus, '/carla/hero/vehicle_status', self.vehicle_status_cb, 10
@@ -163,6 +171,23 @@ class ControlNode(Node):
         """
         self.obstacles = msg.obstacles
         self.obstacles_stamp = msg.header.stamp
+
+        # Debug
+        n = len(msg.obstacles)
+        self.get_logger().debug(
+            f"[obstacles_cb] received {n} obstacles "
+            f"frame={msg.header.frame_id} "
+            f"stamp={msg.header.stamp.sec}.{msg.header.stamp.nanosec:09d}"
+        )
+
+        for i, obs in enumerate(msg.obstacles[:3]):  # log first 3 for sanity
+            track_id = getattr(obs, 'track_id', -1)
+            rel_v = getattr(obs, 'relative_speed', float('nan'))
+            self.get_logger().debug(
+                f"  RawObs[{i}]: id={track_id}, class={obs.class_id}, "
+                f"pos=({obs.position.x:.2f},{obs.position.y:.2f}), "
+                f"rel_v={rel_v:.2f}"
+            )
 
     def vehicle_status_cb(self, msg):
         """
@@ -288,6 +313,323 @@ class ControlNode(Node):
         
         return np.std(distances) > 2.0 # High variance = intersection
     
+    @staticmethod
+    def _point_to_segment_distance(px, py, x1, y1, x2, y2):
+        """
+        Calculate perpendicular distance from point to line segment.
+        
+        Args:
+            px, py: Point coordinates
+            x1, y1, x2, y2: Line segment endpoints
+        
+        Returns:
+            float: Perpendicular distance from point to segment
+        """
+        seg_dx = x2 - x1
+        seg_dy = y2 - y1
+        seg_len_sq = seg_dx**2 + seg_dy**2
+        
+        if seg_len_sq == 0.0:
+            return math.hypot(px - x1, py - y1)
+        
+        # Project point onto line segment
+        t = ((px - x1) * seg_dx + (py - y1) * seg_dy) / seg_len_sq
+        t = max(0.0, min(1.0, t))  # Clamp to segment
+        
+        # Find closest point on segment
+        closest_x = x1 + t * seg_dx
+        closest_y = y1 + t * seg_dy
+        
+        return math.hypot(px - closest_x, py - closest_y)
+    
+    def filter_obstacles_on_path(self, obstacles):
+        """
+        Filter obstacles to those that lie within a lateral corridor around a planned path
+
+        Args:
+            obstacles (Sequence[Obstacle]) : Obstacles expressed in the base_link frame.
+
+        Returns:
+            list: Obstacles whose projected position falls within the allowable lateral envelope.
+        """
+        if not obstacles:
+            return []
+        
+        # ====================
+        # SETUP
+        # ====================
+        lane_width = self.default_lane_width
+        if self.lane_info and self.lane_info.lane_width > 0.0:
+            lane_width = self.lane_info.lane_width
+        
+        base_lateral_limit = (lane_width / 2.0) + self.obstacle_path_lateral_margin
+
+        #====================
+        # VALIDATE PATH
+        #====================
+        pp = self.pure_pursuit
+
+        if self.curr_pose is None or not pp.waypoints:
+            self.get_logger().warn(
+                "[filter] No path available, skipping path-based filtering"
+            )
+            return list(obstacles)
+        
+        if len(pp.waypoints) < 2:
+            self.get_logger().warn(
+                "[filter] Too few waypoints, skipping path-based filtering"
+            )
+            return list(obstacles)
+        
+        vehicle_loc = self.curr_pose.location
+        yaw_rad = math.radians(self.curr_pose.rotation.yaw)
+        cos_yaw = math.cos(yaw_rad)
+        sin_yaw = math.sin(yaw_rad)
+
+        #====================
+        # FIND CLOSEST WAYPOINT TO EGO VEHICLE
+        #====================
+        # Use Pure Pursuit's existing logic to find closest waypoint
+        closest_idx = pp.find_closest_waypoint(
+            max(0, pp.prev_target_idx - 5)
+        )
+
+        closest_wp = pp.waypoints[closest_idx]
+        closest_wp_dist = math.sqrt(
+            (closest_wp[0] - vehicle_loc.x)**2 +
+            (closest_wp[1] - vehicle_loc.y)**2
+        )
+
+        # If closest waypoint is still far (>30m)
+        if closest_wp_dist > 30.0:
+            self.get_logger().warn(
+                f"[filter] Closest waypoint {closest_wp_dist:.1f}m away, "
+                f"skipping path-based filtering"
+            )
+            return list(obstacles)
+        
+        #====================
+        # BUILD RELEVANT PATH SEGMENT
+        #====================
+        # Start from closest waypoint, collect wps w/i 30.0m
+        max_path_dist = 30.0
+
+        relevant_waypoints = []
+        path_distance_accumulated = 0.0
+
+        # Start from closest waypoint
+        for idx in range(closest_idx, len(pp.waypoints)):
+            wx, wy = pp.waypoints[idx]
+
+            # Add this waypoint
+            relevant_waypoints.append((wx, wy))
+
+            # Calculate distance to next waypoint
+            if idx + 1 < len(pp.waypoints):
+                next_wx, next_wy = pp.waypoints[idx+1]
+                segment_length = math.sqrt(
+                    (next_wx - wx)**2 + (next_wy - wy)**2
+                )
+                path_distance_accumulated += segment_length
+
+                if path_distance_accumulated > max_path_dist:
+                    break
+        
+        if len(relevant_waypoints) < 2:
+            self.get_logger().warn(
+                "[filter] Not enough waypoints ahead, skipping path based filtering"
+            )
+            return list(obstacles)
+        
+        self.get_logger().debug(
+            f"[PATH] Using {len(relevant_waypoints)} waypoints "
+            f"covering {path_distance_accumulated:.1f}m of path "
+            f"(starting from idx={closest_idx})"
+        )
+
+        #====================
+        # DETECT IMMEDIATE PATH CURVATURE
+        #====================
+        # Only check next 15m of path for curvature
+        path_lateral_positions = []
+        for wx, wy in relevant_waypoints:
+            # Calculate distance from vehicle
+            dx = wx - vehicle_loc.x
+            dy = wy - vehicle_loc.y
+            dist_to_wp = math.sqrt(dx*dx + dy*dy)
+
+            # Only check waypoints w/i 15m
+            if dist_to_wp > 15.0:
+                break
+
+            # Calculate lateral offset in vehicle frame
+            lateral_offset = -dx * sin_yaw + dy * cos_yaw
+            path_lateral_positions.append(lateral_offset)
+        
+        is_curved_path = False
+        if len(path_lateral_positions) >= 3:
+            path_lateral_range = max(path_lateral_positions) - min(path_lateral_positions)
+            # Real Curve : 1-4m lateral range in next 15m
+            is_curved_path = (1.0 < path_lateral_range < 4.0)
+
+            if path_lateral_range > 4.0:
+                # Distant turn, not immediate curve
+                is_curved_path = False
+                self.get_logger().debug(
+                    f"[PATH] Ignoring distant turn: lateral_range={path_lateral_range:.2f}m"
+                )
+            elif is_curved_path:
+                self.get_logger().debug(
+                    f"[PATH] Curved path detected: lateral_range={path_lateral_range:.2f}m"
+                )
+        
+        #====================
+        # FILTER OBSTACLES
+        #====================
+        filtered = []
+
+        for obstacle in obstacles:
+            base_link_position = getattr(obstacle, 'position', None)
+            if base_link_position is None:
+                continue
+
+            distance = getattr(base_link_position, 'x', None)
+            lateral = getattr(base_link_position, 'y', None)
+            if distance is None or lateral is None:
+                continue
+
+            # Skip obstacles behind vehicle
+            if distance < 0.0:
+                continue
+
+            obstacle_id = getattr(obstacle, 'track_id', 0)
+            class_id = getattr(obstacle, 'class_id', UNKNOWN_CLASS_ID)
+
+            #====================
+            # LAYER 1: EMERGENCY ZONE (0-8m)
+            #====================
+            if distance < 8.0:
+                # For very close objects, use simple base link check
+                if abs(lateral) < 2.0:
+                    filtered.append(obstacle)
+                    self.get_logger().warn(
+                        f"[EMERGENCY] dist={distance:.2f}m, lat={lateral:.2f}m "
+                        f"class={class_id}, id={obstacle_id}"
+                    )
+                    continue
+                else:
+                    self.get_logger().debug(
+                        f"[EMERGENCY REJECT] dist={distance:.2f}m, lat={lateral:.2f}m "
+                        f"(outside +-2m corridor)"
+                    )
+                    continue
+
+            # Transform obstacle to world frame
+            world_x = vehicle_loc.x + distance * cos_yaw - lateral * sin_yaw
+            world_y = vehicle_loc.y + distance * sin_yaw + lateral * cos_yaw
+
+            min_lateral_offset = float('inf')
+
+            for i in range(len(relevant_waypoints) - 1):
+                x1, y1 = relevant_waypoints[i]
+                x2, y2 = relevant_waypoints[i+1]
+
+                lateral_offset = self._point_to_segment_distance(
+                    world_x, world_y,  x1, y1, x2, y2
+                )
+
+                if lateral_offset < min_lateral_offset:
+                    min_lateral_offset = lateral_offset 
+            
+            #====================
+            # LAYER 2: CRITICAL ZONE (8-15m)
+            #====================
+            if distance < 15.0:
+                critical_lateral = base_lateral_limit * 1.2
+
+                if min_lateral_offset <= critical_lateral:
+                    filtered.append(obstacle)
+                    self.get_logger().warn(
+                        f"[CRITICAL] dist={distance:.2f}m, "
+                        f"lat_to_path={min_lateral_offset:.2f}m "
+                        f"class={class_id}, id={obstacle_id}"
+                    )
+                    continue
+                else:
+                    self.get_logger().debug(
+                        f"[CRITICAL REJECT] dist={distance:.2f}m "
+                        f"lat_to_path={min_lateral_offset:.2f}m"
+                    )
+                    continue
+            
+            #====================
+            # LAYER 3: WARNING ZONE (15-25m)
+            #====================
+            elif distance < 25.0:
+                # Matched camera detections - more lenient
+                if class_id in [0,2,3,5,7,12] and obstacle_id < 65535:
+                    warning_lateral = base_lateral_limit
+                    if is_curved_path:
+                        warning_lateral = (lane_width / 2.0) + 0.5
+
+                    if min_lateral_offset <= warning_lateral:
+                        filtered.append(obstacle)
+                        self.get_logger().warn(
+                            f"[WARNING] Matched: dist={distance:.1f}m, "
+                            f"lat_to_path={min_lateral_offset:.2f}m, class={class_id}"
+                        )
+                        continue
+                
+                # Unmatched LiDAR - strict filtering
+                elif obstacle_id == 0 or obstacle_id >= 65535:
+                    unmatched_lateral = 1.2
+                    if is_curved_path:
+                        unmatched_lateral = 1.0
+
+                    if min_lateral_offset <= unmatched_lateral:
+                        filtered.append(obstacle)
+                        self.get_logger().warn(
+                            f"[WARNING] Unmatched: dist={distance:.1f}m, "
+                            f"lat_to_path={min_lateral_offset:.2f}m"
+                        )
+                        continue
+                    else:
+                        self.get_logger().debug(
+                            f"[WARNING REJECT] Unmatched roadside: "
+                            f"dist={distance:.1f}m, lat_to_path={min_lateral_offset:.2f}m"
+                        )
+                        continue
+            
+            #====================
+            # LAYER 4: FAR ZONE (>25m)
+            #====================
+            else:
+                # Only keep well-classified obstacles on centerline
+                if class_id in [0, 2, 3, 5, 7, 12] and obstacle_id < 65535:
+                    far_lateral = (lane_width / 2.0) + 0.3
+                    
+                    if min_lateral_offset <= far_lateral:
+                        filtered.append(obstacle)
+                        self.get_logger().debug(
+                            f"[FAR] dist={distance:.1f}m, "
+                            f"lat_to_path={min_lateral_offset:.2f}m"
+                        )
+                        continue
+                
+                # Reject all unmatched distant obstacles
+                self.get_logger().debug(
+                    f"[FAR REJECT] dist={distance:.1f}m, "
+                    f"lat_to_path={min_lateral_offset:.2f}m, "
+                    f"class={class_id}, id={obstacle_id}"
+                )
+                continue
+        
+        self.get_logger().debug(
+            f"[filter_obstacles_on_path] kept {len(filtered)}/{len(obstacles)} obstacles"
+        )
+        
+        return filtered
+
     def calculate_obstacle_speed_factor(self, obstacles, curr_speed):
         """
         Calculate speed reduction factor based on obstacles with progressive reduction.
@@ -299,6 +641,10 @@ class ControlNode(Node):
         Returns:
             tuple: (speed_factor, closest_distance, emergency_stop_required)
         """
+        self.get_logger().debug(
+            f"[AEB] input: {len(obstacles)} obstacles, curr_speed={curr_speed:.2f}m/s"
+        )
+
         if not obstacles:
             return 1.0, float('inf'), False
         
@@ -307,13 +653,25 @@ class ControlNode(Node):
         closest_class = None
         
         for obstacle in obstacles:
-            if hasattr(obstacle, 'distance'):
-                if obstacle.distance < closest_distance:
-                    closest_distance = obstacle.distance
-                    closest_class = getattr(obstacle, 'class_id', 0)
+            base_link_position = getattr(obstacle, 'position', None)
+            if base_link_position is None:
+                continue
+            
+            distance = getattr(base_link_position, 'x', None)
+            if distance is None:
+                continue
+
+            if distance < closest_distance:
+                closest_distance = distance
+                closest_class = getattr(obstacle, 'class_id', UNKNOWN_CLASS_ID)
         
         if closest_distance == float('inf'):
             return 1.0, float('inf'), False
+        
+        self.get_logger().debug(
+            f"[AEB] closest_obstacle: dist={closest_distance:.2f}m, "
+            f"class={closest_class}"
+        )
         
         # ========================
         # CLASS-SPECIFIC DISTANCE THRESHOLDS
@@ -364,7 +722,7 @@ class ControlNode(Node):
             # Linear reduction from 1.0 to 0.7 as we get closer  
             normalized_distance = (closest_distance - slow_distance) / (comfort_distance - slow_distance)
             speed_factor = 0.7 + 0.3 * normalized_distance  # 70% to 100% speed
-            self.get_logger().debug(f"CAUTION ZONE: {closest_distance:.1f}m - Speed factor: {speed_factor:.2f}")
+            self.get_logger().info(f"CAUTION ZONE: {closest_distance:.1f}m - Speed factor: {speed_factor:.2f}")
             
         else:
             # SAFE ZONE: Full speed allowed
@@ -464,23 +822,34 @@ class ControlNode(Node):
         else:
             obs_time = curr_time
 
+        obs_age = curr_time - obs_time
+        raw_obs_count = len(self.obstacles) if self.obstacles is not None else 0
+        self.get_logger().debug(
+            f"[control_loop] obstacle_age={obs_age:.3f}s, raw_count={raw_obs_count}"
+        )
+
         # Filter stale obstacle detections
         if curr_time - obs_time > 0.5:  # 500ms staleness threshold
             obstacles = []
         else:
-            obstacles = self.obstacles  
+            obstacles = list(self.obstacles)
+        
+        self.get_logger().debug(
+            f"[control_loop] after freshness filter: {len(obstacles)} obstacles"
+        )
+
+        obstacles = self.filter_obstacles_on_path(obstacles)
+        self.get_logger().debug(
+            f"[control_loop] after path filter: {len(obstacles)} obstacles"
+        )  
 
         # Calculate progressive speed reduction based on obstacles
         obstacle_speed_factor, closest_distance, emergency_stop = self.calculate_obstacle_speed_factor(obstacles, self.curr_speed)
 
-        # Log obstacle information for debugging
-        # if obstacles:
-        #     self.get_logger().info(f"Processing {len(obstacles)} obstacles")
-        #     for i, obs in enumerate(obstacles[:3]):  # Log first 3 obstacles
-        #         self.get_logger().info(
-        #             f"Obstacle {i}: Dist={obs.distance:.1f}m, "
-        #             f"Class={obs.class_id}, TrackID={getattr(obs, 'track_id', 'None')}"
-        #         )
+        self.get_logger().debug(
+            f"[control_loop] AEB summary: closest={closest_distance:.2f}m, "
+            f"speed_factor={obstacle_speed_factor:.2f}, emergency={emergency_stop}"
+        )
 
         # ========================
         # COMPREHENSIVE SPEED ADAPTATION
@@ -539,7 +908,7 @@ class ControlNode(Node):
         if self.curr_speed < 0.8 and closest_distance < 15.0:
             throttle = 0.0
             brake = max(brake, 0.4)  # Maintain brake pressure
-            self.get_logger().debug(f"HOLDING BRAKE: Speed={self.curr_speed:.1f}, Distance={closest_distance:.1f}")
+            self.get_logger().info(f"HOLDING BRAKE: Speed={self.curr_speed:.1f}, Distance={closest_distance:.1f}")
         
         # ========================
         # SAFETY BOUNDS AND COMMAND PUBLICATION
