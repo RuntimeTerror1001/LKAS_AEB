@@ -278,6 +278,14 @@ namespace lkas_aeb_fusion{
                     double object_volume = base_link_bbox.size.x * base_link_bbox.size.y * base_link_bbox.size.z;
 
                     // Filter out roadside clutter
+                    if(lateral_distance > 1.5){
+                        RCLCPP_DEBUG(this->get_logger(),
+                            "Filtering roadside object: x=%.1f, y=%.1f",
+                            forward_distance, lateral_distance
+                        );
+                        continue;
+                    }
+
                     // Only skip if object is both far laterally AND far forward
                     if(lateral_distance > max_lateral_offset_ && forward_distance > max_unmatched_distance_)
                         continue; 
@@ -313,7 +321,7 @@ namespace lkas_aeb_fusion{
                 }
                 else{
                     // No match - LiDAR only
-                    fused_obstacle.class_id = 0;  // Unknown
+                    fused_obstacle.class_id = UNKNOWN_CLASS_ID;  // Unknown
                     fused_obstacle.track_id = 0;  // No tracking
                     fused_obstacle.speed = 0.0;
                     fused_obstacle.relative_speed = 0.0;

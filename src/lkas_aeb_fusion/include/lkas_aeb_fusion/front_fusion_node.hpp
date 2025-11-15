@@ -25,12 +25,15 @@
 // Camera Projection
 #include "image_geometry/pinhole_camera_model.h"
 #include "opencv2/core/types.hpp"
+#include <cstdint>
 
 namespace lkas_aeb_fusion {
 
     using ObstaclesMsg      = lkas_aeb_msgs::msg::ObstacleArray;
     using Detections3DMsg   = vision_msgs::msg::Detection3DArray;
     using CameraInfoMsg     = sensor_msgs::msg::CameraInfo;
+
+    constexpr uint16_t UNKNOWN_CLASS_ID = 65535;
 
     using ApproxTimeSyncPolicy = message_filters::sync_policies::ApproximateTime<
         ObstaclesMsg, Detections3DMsg, CameraInfoMsg>;
